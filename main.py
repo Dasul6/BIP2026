@@ -3,13 +3,21 @@ Multi-sensor read: turbidity (A0), pH (A1), dissolved oxygen (A2)
 on a single ADS1115, read from a Raspberry Pi.
 
 Run with:  python test_sensors.py
-Stop with: Ctrl+C
+Stop with: Ctrl+C  -- this saves a graph (PNG) and a log (XLSX) of everything
+           read during the session into the same folder as this script.
 """
 import time
 import statistics
+from datetime import datetime
 
 import board
 from adafruit_ads1x15 import ADS1115, AnalogIn, ads1x15
+
+import matplotlib
+matplotlib.use("Agg")  # no display attached over SSH/terminal; save straight to file
+import matplotlib.pyplot as plt
+
+from openpyxl import Workbook
 
 # --- Per-channel divider scale ----------------------------------------------
 # If a sensor uses a voltage divider (like turbidity's 10k/20k into A0),
@@ -82,6 +90,58 @@ def read_channel(chan, scale):
     return v, noise
 
 
+def save_outputs(timestamps, elapsed, turbidity_v, ph_v, ph_vals, do_v, do_vals):
+    if not timestamps:
+        print("No readings were collected, nothing to save.")
+        return
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    png_path = f"sensor_log_{stamp}.png"
+    xlsx_path = f"sensor_log_{stamp}.xlsx"
+
+    # --- Graph: one plot per parameter, sharing the time axis -----------------
+    fig, axes = plt.subplots(3, 1, figsize=(9, 8), sharex=True)
+
+    axes[0].plot(elapsed, turbidity_v, color="tab:brown")
+    axes[0].set_ylabel("Turbidity (V)")
+    axes[0].set_title("Turbidity")
+
+    axes[1].plot(elapsed, ph_vals, color="tab:green")
+    axes[1].set_ylabel("pH")
+    axes[1].set_title("pH")
+
+    axes[2].plot(elapsed, do_vals, color="tab:blue")
+    axes[2].set_ylabel("DO (mg/L)")
+    axes[2].set_title("Dissolved Oxygen")
+    axes[2].set_xlabel("Elapsed time (s)")
+
+    fig.tight_layout()
+    fig.savefig(png_path)
+    plt.close(fig)
+
+    # --- Log: every parameter, raw voltage and converted value, to Excel -----
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sensor Log"
+    ws.append([
+        "Timestamp", "Elapsed (s)",
+        "Turbidity (V)",
+        "pH Voltage (V)", "pH",
+        "DO Voltage (V)", "DO (mg/L)",
+    ])
+    for i in range(len(timestamps)):
+        ws.append([
+            timestamps[i], round(elapsed[i], 2),
+            round(turbidity_v[i], 4),
+            round(ph_v[i], 4), round(ph_vals[i], 2),
+            round(do_v[i], 4), round(do_vals[i], 2),
+        ])
+    wb.save(xlsx_path)
+
+    print(f"Saved graph to {png_path}")
+    print(f"Saved log to {xlsx_path}")
+
+
 def main():
     try:
         i2c = board.I2C()
@@ -96,8 +156,13 @@ def main():
     ph_chan = AnalogIn(ads, ads1x15.Pin.A1)
     do_chan = AnalogIn(ads, ads1x15.Pin.A2)
 
-    print("Reading turbidity (A0), pH (A1), dissolved oxygen (A2). Ctrl+C to stop.\n")
+    print("Reading turbidity (A0), pH (A1), dissolved oxygen (A2). Ctrl+C to stop")
+    print("and save a graph (PNG) and log (XLSX) of this session.\n")
     print("Calibration values are placeholders until you fill in PH_CAL and DO_CAL.\n")
+
+    timestamps, elapsed = [], []
+    turbidity_v, ph_v, ph_vals, do_v, do_vals = [], [], [], [], []
+    start = time.monotonic()
 
     try:
         while True:
@@ -113,8 +178,17 @@ def main():
                 f"pH: {p_v:.3f} V -> {ph_val:.2f} (+/-{p_noise:.3f} V)  |  "
                 f"DO: {d_v:.3f} V -> {do_val:.2f} mg/L (+/-{d_noise:.3f} V)"
             )
+
+            timestamps.append(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            elapsed.append(time.monotonic() - start)
+            turbidity_v.append(t_v)
+            ph_v.append(p_v)
+            ph_vals.append(ph_val)
+            do_v.append(d_v)
+            do_vals.append(do_val)
     except KeyboardInterrupt:
-        print("\nStopped.")
+        print("\nStopped. Saving graph and log...")
+        save_outputs(timestamps, elapsed, turbidity_v, ph_v, ph_vals, do_v, do_vals)
 
 
 if __name__ == "__main__":
