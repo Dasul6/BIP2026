@@ -14,7 +14,8 @@ import board
 from adafruit_ads1x15 import ADS1115, AnalogIn, ads1x15
 
 import matplotlib
-matplotlib.use("Agg")  # no display attached over SSH/terminal; save straight to file
+matplotlib.use("TkAgg")  # interactive window; run this from a terminal on the Pi's
+                          # own desktop (with the monitor attached), not over SSH
 import matplotlib.pyplot as plt
 
 from openpyxl import Workbook
@@ -164,6 +165,27 @@ def main():
     turbidity_v, ph_v, ph_vals, do_v, do_vals = [], [], [], [], []
     start = time.monotonic()
 
+    # --- Live plot window setup -----------------------------------------------
+    plt.ion()
+    fig, axes = plt.subplots(3, 1, figsize=(9, 8), sharex=True)
+    line_t, = axes[0].plot([], [], color="tab:brown")
+    axes[0].set_ylabel("Turbidity (V)")
+    axes[0].set_title("Turbidity")
+
+    line_p, = axes[1].plot([], [], color="tab:green")
+    axes[1].set_ylabel("pH")
+    axes[1].set_title("pH")
+
+    line_d, = axes[2].plot([], [], color="tab:blue")
+    axes[2].set_ylabel("DO (mg/L)")
+    axes[2].set_title("Dissolved Oxygen")
+    axes[2].set_xlabel("Elapsed time (s)")
+
+    fig.tight_layout()
+    fig.canvas.manager.set_window_title("Live sensor readings")
+    plt.show(block=False)
+    # ---------------------------------------------------------------------------
+
     try:
         while True:
             t_v, t_noise = read_channel(turbidity_chan, TURBIDITY_SCALE)
@@ -186,8 +208,21 @@ def main():
             ph_vals.append(ph_val)
             do_v.append(d_v)
             do_vals.append(do_val)
+
+            # Update the live window with the newest data
+            line_t.set_data(elapsed, turbidity_v)
+            line_p.set_data(elapsed, ph_vals)
+            line_d.set_data(elapsed, do_vals)
+            for ax in axes:
+                ax.relim()
+                ax.autoscale_view()
+            fig.canvas.draw()
+            fig.canvas.flush_events()
+            plt.pause(0.001)
     except KeyboardInterrupt:
         print("\nStopped. Saving graph and log...")
+        fig.savefig(f"sensor_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}_live.png")
+        plt.close(fig)
         save_outputs(timestamps, elapsed, turbidity_v, ph_v, ph_vals, do_v, do_vals)
 
 
